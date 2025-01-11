@@ -1,0 +1,1395 @@
+From 201b2f76d328fa98cb93007214b4df089b22c9c6 Mon Sep 17 00:00:00 2001
+From: raghavt20 <raghavt20@aospa.co>
+Date: Tue, 7 Jan 2025 18:59:51 +0530
+Subject: [PATCH] biometrics: virtualhal: Revert for mfp daemon to work
+
+Revert "Merge "Retrieve IFIngerprint from IVirtual interface over Fingerprint Virtual HAL" into main"
+
+This reverts commit 2c2b2ca72d12be5760769c3bf5ed7a72e0ed92cf, reversing
+changes made to 529e1eb7536b4bffb24d3ecca79e22841b8d9d2c.
+
+Revert "Optionally use fingerprint virtual hal eith BiometricTestSession"
+
+This reverts commit fbef2e303def7c35a7e75503e315a8044075e772.
+
+Revert "Allow Biometric TestApi to use virtual hal"
+
+This reverts commit 97270611df31a05ea84e40ad3320137367487c4b.
+
+Revert "Merge "Call setIgnore directly on session" into main"
+
+This reverts commit 69b28036076cd14c5bc3ec64d06b469b450f0cff, reversing
+changes made to b92453431e94647ccac43166727130ea7fd2046d.
+
+Revert "Face VHAL for user build"
+
+This reverts commit 7b3dcebe6388f6c2dc01033af70e74f169a74e27.
+
+Revert "udfps: Make pressed udfps view configurable"
+
+This reverts commit b5f1c1bba33d5b6baeefedec20c4be69297ecc14.
+
+Revert "udfps: Restore illumination dot for global hbm"
+
+This reverts commit a44add8719a91c02a5552fda57a7a3b1a9d2c487.
+
+Revert "SystemUI: Update UdfpsTouchOverlay sensorRect on updating overlay params"
+
+This reverts commit 0708276fad178580d4acaebb831824dcbaad3a28.
+---
+ Android.bp                                    |   4 +-
+ .../face/FaceSensorConfigurations.java        |  47 +----
+ .../FingerprintSensorConfigurations.java      |  42 +----
+ .../res/drawable-nodpi/udfps_icon_pressed.png | Bin 108 -> 0 bytes
+ .../res/layout/udfps_touch_overlay.xml        |   5 -
+ .../systemui/biometrics/UdfpsController.java  |   8 +-
+ .../biometrics/UdfpsControllerOverlay.kt      |   8 -
+ .../systemui/biometrics/UdfpsSurfaceView.java | 177 ------------------
+ .../biometrics/ui/view/UdfpsTouchOverlay.kt   |  56 +-----
+ .../server/biometrics/AuthService.java        |   9 +-
+ .../server/biometrics/biometrics.aconfig      |  18 +-
+ .../biometrics/sensors/face/FaceService.java  |  24 +--
+ .../face/aidl/BiometricTestSessionImpl.java   |  53 +-----
+ .../sensors/face/aidl/FaceProvider.java       |  79 +-------
+ .../biometrics/sensors/face/aidl/Sensor.java  |   4 +-
+ .../fingerprint/FingerprintService.java       |  25 +--
+ .../aidl/BiometricTestSessionImpl.java        |  56 +-----
+ .../fingerprint/aidl/FingerprintProvider.java |  83 +-------
+ .../sensors/fingerprint/aidl/Sensor.java      |   6 +-
+ 19 files changed, 58 insertions(+), 646 deletions(-)
+ delete mode 100644 packages/SystemUI/res/drawable-nodpi/udfps_icon_pressed.png
+ delete mode 100644 packages/SystemUI/src/com/android/systemui/biometrics/UdfpsSurfaceView.java
+
+diff --git a/Android.bp b/Android.bp
+index 686925024e022..53e81eb83e48e 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -97,9 +97,7 @@ filegroup {
+         // AIDL sources from external directories
+         ":android.frameworks.location.altitude-V2-java-source",
+         ":android.hardware.biometrics.common-V4-java-source",
+-        ":android.hardware.biometrics.fingerprint-V5-java-source",
+-        ":android.hardware.biometrics.fingerprint.virtualhal-java-source",
+-        ":android.hardware.biometrics.face.virtualhal-java-source",
++        ":android.hardware.biometrics.fingerprint-V3-java-source",
+         ":android.hardware.biometrics.face-V4-java-source",
+         ":android.hardware.gnss-V2-java-source",
+         ":android.hardware.graphics.common-V3-java-source",
+diff --git a/core/java/android/hardware/face/FaceSensorConfigurations.java b/core/java/android/hardware/face/FaceSensorConfigurations.java
+index 51c5f4c398a12..12471681f913f 100644
+--- a/core/java/android/hardware/face/FaceSensorConfigurations.java
++++ b/core/java/android/hardware/face/FaceSensorConfigurations.java
+@@ -22,7 +22,6 @@
+ import android.content.Context;
+ import android.hardware.biometrics.face.IFace;
+ import android.hardware.biometrics.face.SensorProps;
+-import android.hardware.biometrics.face.virtualhal.IVirtualHal;
+ import android.os.Binder;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+@@ -161,41 +160,6 @@ public void writeToParcel(@NonNull Parcel dest, int flags) {
+         dest.writeByte((byte) (mResetLockoutRequiresChallenge ? 1 : 0));
+         dest.writeMap(mSensorPropsMap);
+     }
+-    /**
+-     * Remap fqName of VHAL because the `virtual` instance is registered
+-     * with IVirtulalHal now (IFace previously)
+-     * @param fqName fqName to be translated
+-     * @return real fqName
+-     */
+-    public static String remapFqName(String fqName) {
+-        if (!fqName.contains(IFace.DESCRIPTOR + "/virtual")) {
+-            return fqName;  //no remap needed for real hardware HAL
+-        } else {
+-            //new Vhal instance name
+-            return fqName.replace("IFace", "virtualhal.IVirtualHal");
+-        }
+-    }
+-    /**
+-     * @param fqName aidl interface instance name
+-     * @return aidl interface
+-     */
+-    public static IFace getIFace(String fqName) {
+-        if (fqName.contains("virtual")) {
+-            String fqNameMapped = remapFqName(fqName);
+-            Slog.i(TAG, "getIFace fqName is mapped: " + fqName + "->" + fqNameMapped);
+-            try {
+-                IVirtualHal vhal = IVirtualHal.Stub.asInterface(
+-                        Binder.allowBlocking(ServiceManager.waitForService(fqNameMapped)));
+-                return vhal.getFaceHal();
+-            } catch (RemoteException e) {
+-                Slog.e(TAG, "Remote exception in vhal.getFaceHal() call" + fqNameMapped);
+-            }
+-        }
+-
+-        return IFace.Stub.asInterface(
+-                Binder.allowBlocking(ServiceManager.waitForDeclaredService(fqName)));
+-    }
+-
+ 
+     /**
+      * Returns face sensor props for the HAL {@param instance}.
+@@ -209,13 +173,14 @@ public SensorProps[] getSensorPropForInstance(String instance) {
+             return props;
+         }
+ 
++        final String fqName = IFace.DESCRIPTOR + "/" + instance;
++        IFace face = IFace.Stub.asInterface(Binder.allowBlocking(
++                ServiceManager.waitForDeclaredService(fqName)));
+         try {
+-            final String fqName = IFace.DESCRIPTOR + "/" + instance;
+-            final IFace fp = getIFace(fqName);
+-            if (fp != null) {
+-                props = fp.getSensorProps();
++            if (face != null) {
++                props = face.getSensorProps();
+             } else {
+-                Log.d(TAG, "IFace null for instance " + instance);
++                Slog.e(TAG, "Unable to get declared service: " + fqName);
+             }
+         } catch (RemoteException e) {
+             Log.d(TAG, "Unable to get sensor properties!");
+diff --git a/core/java/android/hardware/fingerprint/FingerprintSensorConfigurations.java b/core/java/android/hardware/fingerprint/FingerprintSensorConfigurations.java
+index 48c5887d80d09..43c0da9bd8edc 100644
+--- a/core/java/android/hardware/fingerprint/FingerprintSensorConfigurations.java
++++ b/core/java/android/hardware/fingerprint/FingerprintSensorConfigurations.java
+@@ -23,14 +23,12 @@
+ import android.content.Context;
+ import android.hardware.biometrics.fingerprint.IFingerprint;
+ import android.hardware.biometrics.fingerprint.SensorProps;
+-import android.hardware.biometrics.fingerprint.virtualhal.IVirtualHal;
+ import android.os.Binder;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.os.RemoteException;
+ import android.os.ServiceManager;
+ import android.util.Log;
+-import android.util.Slog;
+ 
+ import java.util.ArrayList;
+ import java.util.HashMap;
+@@ -164,43 +162,6 @@ public void writeToParcel(@NonNull Parcel dest, int flags) {
+         dest.writeMap(mSensorPropsMap);
+     }
+ 
+-
+-    /**
+-     * Remap fqName of VHAL because the `virtual` instance is registered
+-     * with IVirtulalHal now (IFingerprint previously)
+-     * @param fqName fqName to be translated
+-     * @return real fqName
+-     */
+-    public static String remapFqName(String fqName) {
+-        if (!fqName.contains(IFingerprint.DESCRIPTOR + "/virtual")) {
+-            return fqName;  //no remap needed for real hardware HAL
+-        } else {
+-            //new Vhal instance name
+-            return fqName.replace("IFingerprint", "virtualhal.IVirtualHal");
+-        }
+-    }
+-
+-    /**
+-     * @param fqName aidl interface instance name
+-     * @return aidl interface
+-     */
+-    public static IFingerprint getIFingerprint(String fqName) {
+-        if (fqName.contains("virtual")) {
+-            String fqNameMapped = remapFqName(fqName);
+-            Slog.i(TAG, "getIFingerprint fqName is mapped: " + fqName + "->" + fqNameMapped);
+-            try {
+-                IVirtualHal vhal = IVirtualHal.Stub.asInterface(
+-                        Binder.allowBlocking(ServiceManager.waitForService(fqNameMapped)));
+-                return vhal.getFingerprintHal();
+-            } catch (RemoteException e) {
+-                Slog.e(TAG, "Remote exception in vhal.getFingerprintHal() call" + fqNameMapped);
+-            }
+-        }
+-
+-        return IFingerprint.Stub.asInterface(
+-                Binder.allowBlocking(ServiceManager.waitForDeclaredService(fqName)));
+-    }
+-
+     /**
+      * Returns fingerprint sensor props for the HAL {@param instance}.
+      */
+@@ -215,7 +176,8 @@ public SensorProps[] getSensorPropForInstance(String instance) {
+ 
+         try {
+             final String fqName = IFingerprint.DESCRIPTOR + "/" + instance;
+-            final IFingerprint fp = getIFingerprint(fqName);
++            final IFingerprint fp = IFingerprint.Stub.asInterface(Binder.allowBlocking(
++                    ServiceManager.waitForDeclaredService(fqName)));
+             if (fp != null) {
+                 props = fp.getSensorProps();
+             } else {
+diff --git a/packages/SystemUI/res/drawable-nodpi/udfps_icon_pressed.png b/packages/SystemUI/res/drawable-nodpi/udfps_icon_pressed.png
+deleted file mode 100644
+index 4102e28c1300b49323b50625d8cfaa73b006561f..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 108
+zcmeAS@N?(olHy`uVBq!ia0vp^j3CUx1|;Q0k8}bl$r9IylHmNblJdl&R0hYC{G?O`
+z&)mfH)S%SFl*+=BsWw1Ge4Z|jAr-fh5*U~o7?>FtSQ!{^cTT<plwt66^>bP0l+XkK
+D@OB!I
+
+diff --git a/packages/SystemUI/res/layout/udfps_touch_overlay.xml b/packages/SystemUI/res/layout/udfps_touch_overlay.xml
+index 687f4042d1fa5..498d59b44e620 100644
+--- a/packages/SystemUI/res/layout/udfps_touch_overlay.xml
++++ b/packages/SystemUI/res/layout/udfps_touch_overlay.xml
+@@ -18,9 +18,4 @@
+     android:id="@+id/udfps_touch_overlay"
+     android:layout_width="match_parent"
+     android:layout_height="match_parent">
+-    <com.android.systemui.biometrics.UdfpsSurfaceView
+-        android:id="@+id/hbm_view"
+-        android:layout_width="match_parent"
+-        android:layout_height="match_parent"
+-        android:visibility="invisible"/>
+ </com.android.systemui.biometrics.ui.view.UdfpsTouchOverlay>
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+index 91cf0055af7bb..cf378291f4bdf 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsController.java
+@@ -95,7 +95,6 @@
+ import com.android.systemui.biometrics.udfps.SinglePointerTouchProcessor;
+ import com.android.systemui.biometrics.udfps.TouchProcessor;
+ import com.android.systemui.biometrics.udfps.TouchProcessorResult;
+-import com.android.systemui.biometrics.ui.view.UdfpsTouchOverlay;
+ import com.android.systemui.biometrics.ui.viewmodel.DefaultUdfpsTouchOverlayViewModel;
+ import com.android.systemui.biometrics.ui.viewmodel.DeviceEntryUdfpsTouchOverlayViewModel;
+ import com.android.systemui.bouncer.domain.interactor.AlternateBouncerInteractor;
+@@ -1103,9 +1102,8 @@ private void unconfigureDisplay(View view) {
+             return;
+         }
+         if (DeviceEntryUdfpsRefactor.isEnabled()) {
+-            UdfpsTouchOverlay udfpsView = (UdfpsTouchOverlay) view;
+-            if (udfpsView.isDisplayConfigured()) {
+-                udfpsView.unconfigureDisplay();
++            if (mUdfpsDisplayMode != null) {
++                mUdfpsDisplayMode.disable(null);
+             }
+         } else {
+             if (view != null) {
+@@ -1324,7 +1322,7 @@ private void onFingerDown(
+                 dispatchOnUiReady(requestId);
+             } else {
+                 if (DeviceEntryUdfpsRefactor.isEnabled()) {
+-                    ((UdfpsTouchOverlay) view).configureDisplay(() -> dispatchOnUiReady(requestId));
++                    mUdfpsDisplayMode.enable(() -> dispatchOnUiReady(requestId));
+                 } else {
+                     ((UdfpsView) view).configureDisplay(() -> dispatchOnUiReady(requestId));
+                 }
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
+index 73c4e302e4a03..b9763c9a6cd87 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsControllerOverlay.kt
+@@ -246,7 +246,6 @@ constructor(
+                         (inflater.inflate(R.layout.udfps_touch_overlay, null, false)
+                                 as UdfpsTouchOverlay)
+                             .apply {
+-                                 setUdfpsDisplayModeProvider(udfpsDisplayModeProvider)
+                                 // This view overlaps the sensor area
+                                 // prevent it from being selectable during a11y
+                                 if (requestReason.isImportantForAccessibility()) {
+@@ -268,7 +267,6 @@ constructor(
+                                             udfpsOverlayInteractor = udfpsOverlayInteractor,
+                                         )
+                                 }
+-                                sensorRect = sensorBounds
+                             }
+                 } else {
+                     overlayViewLegacy =
+@@ -350,7 +348,6 @@ constructor(
+         DeviceEntryUdfpsRefactor.isUnexpectedlyInLegacyMode()
+         overlayParams = updatedOverlayParams
+         sensorBounds = updatedOverlayParams.sensorBounds
+-        overlayTouchView?.sensorRect = Rect(sensorBounds)
+         getTouchOverlay()?.let {
+             if (addViewRunnable == null) {
+                 // Only updateViewLayout if there's no pending view to add to WM.
+@@ -462,11 +459,6 @@ constructor(
+             }
+             animationViewController = null
+         }
+-        overlayTouchView?.apply {
+-            if (isDisplayConfigured) {
+-                unconfigureDisplay()
+-            }
+-        }
+         if (DeviceEntryUdfpsRefactor.isEnabled) {
+             udfpsDisplayModeProvider.disable(null)
+         }
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsSurfaceView.java b/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsSurfaceView.java
+deleted file mode 100644
+index 69fb84b74f632..0000000000000
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/UdfpsSurfaceView.java
++++ /dev/null
+@@ -1,177 +0,0 @@
+-/*
+- * Copyright (C) 2021 The Android Open Source Project
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.android.systemui.biometrics;
+-
+-import android.annotation.NonNull;
+-import android.annotation.Nullable;
+-import android.content.Context;
+-import android.graphics.drawable.Drawable;
+-import android.graphics.Canvas;
+-import android.graphics.Paint;
+-import android.graphics.PixelFormat;
+-import android.graphics.RectF;
+-import android.util.AttributeSet;
+-import android.util.Log;
+-import android.view.Surface;
+-import android.view.SurfaceHolder;
+-import android.view.SurfaceView;
+-
+-import com.android.systemui.R;
+-
+-/**
+- * Surface View for providing the Global High-Brightness Mode (GHBM) illumination for UDFPS.
+- */
+-public class UdfpsSurfaceView extends SurfaceView implements SurfaceHolder.Callback {
+-    private static final String TAG = "UdfpsSurfaceView";
+-
+-    /**
+-     * Notifies {@link UdfpsView} when to enable GHBM illumination.
+-     */
+-    public interface GhbmIlluminationListener {
+-        /**
+-         * @param surface the surface for which GHBM should be enabled.
+-         * @param onIlluminatedRunnable a runnable that should be run after GHBM is enabled.
+-         */
+-        void enableGhbm(@NonNull Surface surface, @Nullable Runnable onIlluminatedRunnable);
+-    }
+-
+-    @NonNull private final SurfaceHolder mHolder;
+-    @NonNull private final Paint mSensorPaint;
+-
+-    @Nullable private GhbmIlluminationListener mGhbmIlluminationListener;
+-    @Nullable private Runnable mOnIlluminatedRunnable;
+-    boolean mAwaitingSurfaceToStartIllumination;
+-    boolean mHasValidSurface;
+-    private boolean mEnrolling = false;
+-
+-    private Drawable mUdfpsIconPressed;
+-
+-    public UdfpsSurfaceView(Context context, AttributeSet attrs) {
+-        super(context, attrs);
+-
+-        // Make this SurfaceView draw on top of everything else in this window. This allows us to
+-        // 1) Always show the HBM circle on top of everything else, and
+-        // 2) Properly composite this view with any other animations in the same window no matter
+-        //    what contents are added in which order to this view hierarchy.
+-        setZOrderOnTop(true);
+-
+-        mHolder = getHolder();
+-        mHolder.addCallback(this);
+-        mHolder.setFormat(PixelFormat.RGBA_8888);
+-
+-        mSensorPaint = new Paint(0 /* flags */);
+-        mSensorPaint.setAntiAlias(true);
+-        mSensorPaint.setColor(context.getColor(R.color.config_udfpsColor));
+-        mSensorPaint.setStyle(Paint.Style.FILL);
+-
+-        mUdfpsIconPressed = context.getDrawable(R.drawable.udfps_icon_pressed);
+-    }
+-
+-    @Override public void surfaceCreated(SurfaceHolder holder) {
+-        mHasValidSurface = true;
+-        if (mAwaitingSurfaceToStartIllumination) {
+-            doIlluminate(mOnIlluminatedRunnable);
+-            mOnIlluminatedRunnable = null;
+-            mAwaitingSurfaceToStartIllumination = false;
+-        }
+-    }
+-
+-    @Override
+-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+-        // Unused.
+-    }
+-
+-    @Override public void surfaceDestroyed(SurfaceHolder holder) {
+-        mHasValidSurface = false;
+-    }
+-
+-    public void setGhbmIlluminationListener(@Nullable GhbmIlluminationListener listener) {
+-        mGhbmIlluminationListener = listener;
+-    }
+-
+-    /**
+-     * Note: there is no corresponding method to stop GHBM illumination. It is expected that
+-     * {@link UdfpsView} will hide this view, which would destroy the surface and remove the
+-     * illumination dot.
+-     */
+-    public void startGhbmIllumination(@Nullable Runnable onIlluminatedRunnable) {
+-        if (mGhbmIlluminationListener == null) {
+-            Log.e(TAG, "startIllumination | mGhbmIlluminationListener is null");
+-            return;
+-        }
+-
+-        if (mHasValidSurface) {
+-            doIlluminate(onIlluminatedRunnable);
+-        } else {
+-            mAwaitingSurfaceToStartIllumination = true;
+-            mOnIlluminatedRunnable = onIlluminatedRunnable;
+-        }
+-    }
+-
+-    private void doIlluminate(@Nullable Runnable onIlluminatedRunnable) {
+-        if (mGhbmIlluminationListener == null) {
+-            Log.e(TAG, "doIlluminate | mGhbmIlluminationListener is null");
+-            return;
+-        }
+-
+-        mGhbmIlluminationListener.enableGhbm(mHolder.getSurface(), onIlluminatedRunnable);
+-    }
+-
+-    /**
+-     * Immediately draws the illumination dot on this SurfaceView's surface.
+-     */
+-    public void drawIlluminationDot(@NonNull RectF sensorRect) {
+-        if (!mHasValidSurface) {
+-            Log.e(TAG, "drawIlluminationDot | the surface is destroyed or was never created.");
+-            return;
+-        }
+-        Canvas canvas = null;
+-        try {
+-            canvas = mHolder.lockCanvas();
+-            int addDotSize =
+-                getResources().getDimensionPixelSize(R.dimen.udfps_enroll_dot_additional_size);
+-            if (addDotSize > 0 && mEnrolling) {
+-                float newRadius = ((sensorRect.right - sensorRect.left) / 2) + addDotSize;
+-                float centerX = sensorRect.centerX();
+-                float centerY = sensorRect.centerY();
+-                sensorRect.set(
+-                    centerX - newRadius,
+-                    centerY - newRadius,
+-                    centerX + newRadius,
+-                    centerY + newRadius
+-                );
+-            }
+-            mUdfpsIconPressed.setBounds(
+-                    Math.round(sensorRect.left),
+-                    Math.round(sensorRect.top),
+-                    Math.round(sensorRect.right),
+-                    Math.round(sensorRect.bottom)
+-            );
+-            mUdfpsIconPressed.draw(canvas);
+-            canvas.drawOval(sensorRect, mSensorPaint);
+-        } finally {
+-            // Make sure the surface is never left in a bad state.
+-            if (canvas != null) {
+-                mHolder.unlockCanvasAndPost(canvas);
+-            }
+-        }
+-    }
+-
+-    void setEnrolling(boolean enrolling) {
+-        mEnrolling = enrolling;
+-    }
+-}
+diff --git a/packages/SystemUI/src/com/android/systemui/biometrics/ui/view/UdfpsTouchOverlay.kt b/packages/SystemUI/src/com/android/systemui/biometrics/ui/view/UdfpsTouchOverlay.kt
+index 8a3fdf703e65c..2484c339a1d4c 100644
+--- a/packages/SystemUI/src/com/android/systemui/biometrics/ui/view/UdfpsTouchOverlay.kt
++++ b/packages/SystemUI/src/com/android/systemui/biometrics/ui/view/UdfpsTouchOverlay.kt
+@@ -16,65 +16,11 @@
+ package com.android.systemui.biometrics.ui.view
+ 
+ import android.content.Context
+-import android.graphics.Rect
+-import android.graphics.RectF
+ import android.util.AttributeSet
+-import android.view.Surface
+ import android.widget.FrameLayout
+ 
+-import com.android.systemui.biometrics.UdfpsDisplayModeProvider
+-import com.android.systemui.biometrics.UdfpsSurfaceView
+-import com.android.systemui.res.R
+-
+ /**
+  * A translucent (not visible to the user) view that receives touches to send to FingerprintManager
+  * for fingerprint authentication.
+  */
+-class UdfpsTouchOverlay(context: Context, attrs: AttributeSet?) : FrameLayout(context, attrs) {
+-    private var ghbmView: UdfpsSurfaceView? = null
+-    private var udfpsDisplayMode: UdfpsDisplayModeProvider? = null
+-
+-    // sensorRect may be bigger than the sensor. True sensor dimensions are defined in
+-    // overlayParams.sensorBounds
+-    var sensorRect = Rect()
+-
+-    /** True after the call to [configureDisplay] and before the call to [unconfigureDisplay]. */
+-    var isDisplayConfigured: Boolean = false
+-        private set
+-
+-    override fun onFinishInflate() {
+-        super.onFinishInflate()
+-        ghbmView = findViewById(R.id.hbm_view)
+-    }
+-
+-    fun setUdfpsDisplayModeProvider(udfpsDisplayModeProvider: UdfpsDisplayModeProvider?) {
+-        udfpsDisplayMode = udfpsDisplayModeProvider
+-    }
+-
+-    fun configureDisplay(onDisplayConfigured: Runnable) {
+-        isDisplayConfigured = true
+-        ghbmView?.let { view ->
+-            view.setGhbmIlluminationListener(this::doIlluminate)
+-            view.visibility = VISIBLE
+-            view.startGhbmIllumination(onDisplayConfigured)
+-        } ?: {
+-            doIlluminate(null /* surface */, onDisplayConfigured)
+-        }
+-    }
+-
+-    private fun doIlluminate(surface: Surface?, onDisplayConfigured: Runnable?) {
+-        udfpsDisplayMode?.enable {
+-            onDisplayConfigured?.run()
+-            ghbmView?.drawIlluminationDot(RectF(sensorRect))
+-        }
+-    }
+-
+-    fun unconfigureDisplay() {
+-        isDisplayConfigured = false
+-        ghbmView?.let { view ->
+-            view.setGhbmIlluminationListener(null)
+-            view.visibility = INVISIBLE
+-        }
+-        udfpsDisplayMode?.disable(null /* onDisabled */)
+-    }
+-}
++class UdfpsTouchOverlay(context: Context, attrs: AttributeSet?) : FrameLayout(context, attrs)
+diff --git a/services/core/java/com/android/server/biometrics/AuthService.java b/services/core/java/com/android/server/biometrics/AuthService.java
+index 951054fca7158..86e5582b4ff25 100644
+--- a/services/core/java/com/android/server/biometrics/AuthService.java
++++ b/services/core/java/com/android/server/biometrics/AuthService.java
+@@ -49,6 +49,8 @@
+ import android.hardware.biometrics.PromptInfo;
+ import android.hardware.biometrics.SensorLocationInternal;
+ import android.hardware.biometrics.SensorPropertiesInternal;
++import android.hardware.biometrics.fingerprint.IFingerprint;
++import android.hardware.biometrics.face.IFace;
+ import android.hardware.face.FaceSensorConfigurations;
+ import android.hardware.face.FaceSensorProperties;
+ import android.hardware.face.FaceSensorPropertiesInternal;
+@@ -72,9 +74,7 @@
+ import com.android.internal.annotations.VisibleForTesting;
+ import com.android.internal.util.ArrayUtils;
+ import com.android.server.SystemService;
+-import com.android.server.biometrics.sensors.face.FaceService;
+ import com.android.server.biometrics.sensors.face.sense.SenseUtils;
+-import com.android.server.biometrics.sensors.fingerprint.FingerprintService;
+ import com.android.server.companion.virtual.VirtualDeviceManagerInternal;
+ 
+ import java.util.ArrayList;
+@@ -204,7 +204,7 @@ public boolean isHidlDisabled(Context context) {
+          */
+         @VisibleForTesting
+         public String[] getFingerprintAidlInstances() {
+-            return FingerprintService.getDeclaredInstances();
++            return ServiceManager.getDeclaredInstances(IFingerprint.DESCRIPTOR);
+         }
+ 
+         /**
+@@ -212,7 +212,7 @@ public String[] getFingerprintAidlInstances() {
+          */
+         @VisibleForTesting
+         public String[] getFaceAidlInstances() {
+-            return FaceService.getDeclaredInstances();
++            return ServiceManager.getDeclaredInstances(IFace.DESCRIPTOR);
+         }
+ 
+         /**
+@@ -1057,3 +1057,4 @@ private SensorPropertiesInternal getHidlIrisSensorProps(int sensorId,
+                 resetLockoutRequiresChallenge);
+     }
+ }
++
+diff --git a/services/core/java/com/android/server/biometrics/biometrics.aconfig b/services/core/java/com/android/server/biometrics/biometrics.aconfig
+index d3da8dd2cfda6..444c6b1b6c055 100644
+--- a/services/core/java/com/android/server/biometrics/biometrics.aconfig
++++ b/services/core/java/com/android/server/biometrics/biometrics.aconfig
+@@ -9,10 +9,10 @@ flag {
+ }
+ 
+ flag {
+-  name: "use_vhal_for_testing"
+-  namespace: "biometrics_framework"
+-  description: "This flag controls whether virtual HAL is used for testing instead of TestHal "
+-  bug: "294254230"
++    name: "de_hidl"
++    namespace: "biometrics_framework"
++    description: "feature flag for biometrics de-hidl"
++    bug: "287332354"
+ }
+ 
+ flag {
+@@ -24,13 +24,3 @@ flag {
+       purpose: PURPOSE_BUGFIX
+   }
+ }
+-
+-flag {
+-  name: "set_ignore_speed_up"
+-  namespace: "biometrics_framework"
+-  description: "This flag controls whether setIgnoreDisplayTouches is called directly on session from FingerprintProvider"
+-  bug: "359289274"
+-  metadata {
+-      purpose: PURPOSE_BUGFIX
+-  }
+-}
+diff --git a/services/core/java/com/android/server/biometrics/sensors/face/FaceService.java b/services/core/java/com/android/server/biometrics/sensors/face/FaceService.java
+index 3853d41979834..700dd26f49ca6 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/face/FaceService.java
++++ b/services/core/java/com/android/server/biometrics/sensors/face/FaceService.java
+@@ -19,7 +19,6 @@
+ import static android.Manifest.permission.INTERACT_ACROSS_USERS;
+ import static android.Manifest.permission.MANAGE_FACE;
+ import static android.Manifest.permission.USE_BIOMETRIC_INTERNAL;
+-import static android.hardware.face.FaceSensorConfigurations.getIFace;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -63,7 +62,6 @@
+ import android.view.Surface;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.DumpUtils;
+ import com.android.internal.widget.LockPatternUtils;
+ import com.android.server.SystemService;
+@@ -779,7 +777,7 @@ public void unregisterAuthenticationStateListener(
+     public FaceService(Context context) {
+         this(context, null /* faceProviderFunction */, () -> IBiometricService.Stub.asInterface(
+                 ServiceManager.getService(Context.BIOMETRIC_SERVICE)), null /* faceProvider */,
+-                () -> getDeclaredInstances());
++                () -> ServiceManager.getDeclaredInstances(IFace.DESCRIPTOR));
+     }
+ 
+     @VisibleForTesting FaceService(Context context,
+@@ -804,7 +802,8 @@ public void onAllAuthenticatorsRegistered(List<FaceSensorPropertiesInternal> sen
+ 
+         mFaceProvider = faceProvider != null ? faceProvider : (name) -> {
+             final String fqName = IFace.DESCRIPTOR + "/" + name;
+-            final IFace face = getIFace(fqName);
++            final IFace face = IFace.Stub.asInterface(
++                    Binder.allowBlocking(ServiceManager.waitForDeclaredService(fqName)));
+             if (face == null) {
+                 Slog.e(TAG, "Unable to get declared service: " + fqName);
+                 return null;
+@@ -860,23 +859,6 @@ public void onStart() {
+      */
+     public static native void releaseSurfaceHandle(@NonNull NativeHandle handle);
+ 
+-    /**
+-     * Get all face hal instances declared in manifest
+-     * @return instance names
+-     */
+-    public static String[] getDeclaredInstances() {
+-        String[] a = ServiceManager.getDeclaredInstances(IFace.DESCRIPTOR);
+-        Slog.i(TAG, "Before:getDeclaredInstances: IFace instance found, a.length="
+-                + a.length);
+-        if (!ArrayUtils.contains(a, "virtual")) {
+-            // Now, the virtual hal is registered with IVirtualHal interface and it is also
+-            //   moved from vendor to system_ext partition without a device manifest. So
+-            //   if the old vhal is not declared, add here.
+-            a = ArrayUtils.appendElement(String.class, a, "virtual");
+-        }
+-        Slog.i(TAG, "After:getDeclaredInstances: a.length=" + a.length);
+-        return a;
+-    }
+ 
+     void syncEnrollmentsNow() {
+         Utils.checkPermissionOrShell(getContext(), MANAGE_FACE);
+diff --git a/services/core/java/com/android/server/biometrics/sensors/face/aidl/BiometricTestSessionImpl.java b/services/core/java/com/android/server/biometrics/sensors/face/aidl/BiometricTestSessionImpl.java
+index 3ed01d5a2cc96..dca14914a572e 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/face/aidl/BiometricTestSessionImpl.java
++++ b/services/core/java/com/android/server/biometrics/sensors/face/aidl/BiometricTestSessionImpl.java
+@@ -23,9 +23,6 @@
+ import android.hardware.biometrics.face.AuthenticationFrame;
+ import android.hardware.biometrics.face.BaseFrame;
+ import android.hardware.biometrics.face.EnrollmentFrame;
+-import android.hardware.biometrics.face.virtualhal.AcquiredInfoAndVendorCode;
+-import android.hardware.biometrics.face.virtualhal.EnrollmentProgressStep;
+-import android.hardware.biometrics.face.virtualhal.NextEnrollment;
+ import android.hardware.face.Face;
+ import android.hardware.face.FaceAuthenticationFrame;
+ import android.hardware.face.FaceEnrollFrame;
+@@ -53,7 +50,6 @@
+ public class BiometricTestSessionImpl extends ITestSession.Stub {
+ 
+     private static final String TAG = "face/aidl/BiometricTestSessionImpl";
+-    private static final int VHAL_ENROLLMENT_ID = 9999;
+ 
+     @NonNull private final Context mContext;
+     private final int mSensorId;
+@@ -148,35 +144,16 @@ public void setTestHalEnabled(boolean enabled) {
+ 
+         super.setTestHalEnabled_enforcePermission();
+ 
+-        mSensor.setTestHalEnabled(enabled);
+         mProvider.setTestHalEnabled(enabled);
++        mSensor.setTestHalEnabled(enabled);
+     }
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void startEnroll(int userId) throws RemoteException {
++    public void startEnroll(int userId) {
+ 
+         super.startEnroll_enforcePermission();
+ 
+-        Slog.i(TAG, "startEnroll(): isVhalForTesting=" + mProvider.isVhalForTesting());
+-        if (mProvider.isVhalForTesting()) {
+-            final AcquiredInfoAndVendorCode[] acquiredInfoAndVendorCodes =
+-                    {new AcquiredInfoAndVendorCode()};
+-            final EnrollmentProgressStep[] enrollmentProgressSteps =
+-                    {new EnrollmentProgressStep(), new EnrollmentProgressStep()};
+-            enrollmentProgressSteps[0].durationMs = 100;
+-            enrollmentProgressSteps[0].acquiredInfoAndVendorCodes = acquiredInfoAndVendorCodes;
+-            enrollmentProgressSteps[1].durationMs = 200;
+-            enrollmentProgressSteps[1].acquiredInfoAndVendorCodes = acquiredInfoAndVendorCodes;
+-
+-            final NextEnrollment nextEnrollment = new NextEnrollment();
+-            nextEnrollment.id = VHAL_ENROLLMENT_ID;
+-            nextEnrollment.progressSteps = enrollmentProgressSteps;
+-            nextEnrollment.result = true;
+-            mProvider.getVhal().setNextEnrollment(nextEnrollment);
+-            mProvider.getVhal().setOperationAuthenticateDuration(6000);
+-        }
+-
+         mProvider.scheduleEnroll(mSensorId, new Binder(), new byte[69], userId, mReceiver,
+                 mContext.getOpPackageName(), new int[0] /* disabledFeatures */,
+                 null /* previewSurface */, false /* debugConsent */,
+@@ -189,10 +166,6 @@ public void finishEnroll(int userId) {
+ 
+         super.finishEnroll_enforcePermission();
+ 
+-        if (mProvider.isVhalForTesting()) {
+-            return;
+-        }
+-
+         int nextRandomId = mRandom.nextInt();
+         while (mEnrollmentIds.contains(nextRandomId)) {
+             nextRandomId = mRandom.nextInt();
+@@ -205,16 +178,11 @@ public void finishEnroll(int userId) {
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void acceptAuthentication(int userId) throws RemoteException {
++    public void acceptAuthentication(int userId)  {
+ 
+         // Fake authentication with any of the existing faces
+         super.acceptAuthentication_enforcePermission();
+ 
+-        if (mProvider.isVhalForTesting()) {
+-            mProvider.getVhal().setEnrollmentHit(VHAL_ENROLLMENT_ID);
+-            return;
+-        }
+-
+         List<Face> faces = FaceUtils.getInstance(mSensorId)
+                 .getBiometricsForUser(mContext, userId);
+         if (faces.isEmpty()) {
+@@ -228,15 +196,10 @@ public void acceptAuthentication(int userId) throws RemoteException {
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void rejectAuthentication(int userId) throws RemoteException {
++    public void rejectAuthentication(int userId)  {
+ 
+         super.rejectAuthentication_enforcePermission();
+ 
+-        if (mProvider.isVhalForTesting()) {
+-            mProvider.getVhal().setEnrollmentHit(VHAL_ENROLLMENT_ID + 1);
+-            return;
+-        }
+-
+         mSensor.getSessionForUser(userId).getHalSessionCallback().onAuthenticationFailed();
+     }
+ 
+@@ -273,17 +236,11 @@ public void notifyError(int userId, int errorCode)  {
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void cleanupInternalState(int userId) throws RemoteException {
++    public void cleanupInternalState(int userId)  {
+ 
+         super.cleanupInternalState_enforcePermission();
+ 
+         Slog.d(TAG, "cleanupInternalState: " + userId);
+-
+-        if (mProvider.isVhalForTesting()) {
+-            Slog.i(TAG, "cleanup virtualhal configurations");
+-            mProvider.getVhal().resetConfigurations(); //setEnrollments(new int[]{});
+-        }
+-
+         mProvider.scheduleInternalCleanup(mSensorId, userId, new ClientMonitorCallback() {
+             @Override
+             public void onClientStarted(@NonNull BaseClientMonitor clientMonitor) {
+diff --git a/services/core/java/com/android/server/biometrics/sensors/face/aidl/FaceProvider.java b/services/core/java/com/android/server/biometrics/sensors/face/aidl/FaceProvider.java
+index 5127e68a9df33..bb213bfa79e67 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/face/aidl/FaceProvider.java
++++ b/services/core/java/com/android/server/biometrics/sensors/face/aidl/FaceProvider.java
+@@ -16,9 +16,6 @@
+ 
+ package com.android.server.biometrics.sensors.face.aidl;
+ 
+-import static android.hardware.face.FaceSensorConfigurations.getIFace;
+-import static android.hardware.face.FaceSensorConfigurations.remapFqName;
+-
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.app.ActivityManager;
+@@ -35,7 +32,6 @@
+ import android.hardware.biometrics.ITestSessionCallback;
+ import android.hardware.biometrics.face.IFace;
+ import android.hardware.biometrics.face.SensorProps;
+-import android.hardware.biometrics.face.virtualhal.IVirtualHal;
+ import android.hardware.face.Face;
+ import android.hardware.face.FaceAuthenticateOptions;
+ import android.hardware.face.FaceEnrollOptions;
+@@ -58,7 +54,6 @@
+ import com.android.server.biometrics.AuthenticationStatsCollector;
+ import com.android.server.biometrics.BiometricDanglingReceiver;
+ import com.android.server.biometrics.BiometricHandlerProvider;
+-import com.android.server.biometrics.Flags;
+ import com.android.server.biometrics.Utils;
+ import com.android.server.biometrics.log.BiometricContext;
+ import com.android.server.biometrics.log.BiometricLogger;
+@@ -135,11 +130,6 @@ public class FaceProvider implements IBinder.DeathRecipient, ServiceProvider {
+     private AuthenticationStatsCollector mAuthenticationStatsCollector;
+     @Nullable
+     private IFace mDaemon;
+-    @Nullable
+-    private IVirtualHal mVhal;
+-    @Nullable
+-    private String mHalInstanceNameCurrent;
+-
+ 
+     private final class BiometricTaskStackListener extends TaskStackListener {
+         @Override
+@@ -296,37 +286,14 @@ boolean hasHalInstance() {
+         if (mTestHalEnabled) {
+             return true;
+         }
+-        return ServiceManager.checkService(
+-                remapFqName(IFace.DESCRIPTOR + "/" + mHalInstanceName)) != null;
++        return ServiceManager.checkService(IFace.DESCRIPTOR + "/" + mHalInstanceName) != null;
+     }
+ 
+     @Nullable
+     @VisibleForTesting
+     synchronized IFace getHalInstance() {
+         if (mTestHalEnabled) {
+-            if (Flags.useVhalForTesting()) {
+-                if (!mHalInstanceNameCurrent.contains("virtual")) {
+-                    Slog.i(getTag(), "Switching face hal from " + mHalInstanceName
+-                            + " to virtual hal");
+-                    mHalInstanceNameCurrent = "virtual";
+-                    mDaemon = null;
+-                }
+-            } else {
+-                // Enabling the test HAL for a single sensor in a multi-sensor HAL currently enables
+-                // the test HAL for all sensors under that HAL. This can be updated in the future if
+-                // necessary.
+-                return new TestHal();
+-            }
+-        } else {
+-            if (mHalInstanceNameCurrent == null) {
+-                mHalInstanceNameCurrent = mHalInstanceName;
+-            } else if (mHalInstanceNameCurrent.contains("virtual")
+-                    && mHalInstanceNameCurrent != mHalInstanceName) {
+-                Slog.i(getTag(), "Switching face from virtual hal " + "to "
+-                        + mHalInstanceName);
+-                mHalInstanceNameCurrent = mHalInstanceName;
+-                mDaemon = null;
+-            }
++            return new TestHal();
+         }
+ 
+         if (mDaemon != null) {
+@@ -335,7 +302,10 @@ synchronized IFace getHalInstance() {
+ 
+         Slog.d(getTag(), "Daemon was null, reconnecting");
+ 
+-        mDaemon = getIFace(IFace.DESCRIPTOR + "/" + mHalInstanceNameCurrent);
++        mDaemon = IFace.Stub.asInterface(
++                Binder.allowBlocking(
++                        ServiceManager.waitForDeclaredService(
++                                IFace.DESCRIPTOR + "/" + mHalInstanceName)));
+         if (mDaemon == null) {
+             Slog.e(getTag(), "Unable to get daemon");
+             return null;
+@@ -863,13 +833,7 @@ public void binderDied() {
+     }
+ 
+     void setTestHalEnabled(boolean enabled) {
+-        final boolean changed = enabled != mTestHalEnabled;
+         mTestHalEnabled = enabled;
+-        Slog.i(getTag(), "setTestHalEnabled(): isVhalForTestingFlags=" + Flags.useVhalForTesting()
+-                + " mTestHalEnabled=" + mTestHalEnabled + " changed=" + changed);
+-        if (changed && isVhalForTesting()) {
+-            getHalInstance();
+-        }
+     }
+ 
+     @Override
+@@ -886,41 +850,10 @@ public boolean getTestHalEnabled() {
+         return mTestHalEnabled;
+     }
+ 
+-    /**
+-     * Return true if vhal_for_testing feature is enabled and test is active
+-     */
+-    public boolean isVhalForTesting() {
+-        return (Flags.useVhalForTesting() && mTestHalEnabled);
+-    }
+-
+-
+     /**
+      * Sends a face re enroll notification.
+      */
+     public void sendFaceReEnrollNotification() {
+         mAuthenticationStatsCollector.sendFaceReEnrollNotification();
+     }
+-
+-    /**
+-     * Sends a fingerprint enroll notification.
+-     */
+-    public void sendFingerprintReEnrollNotification() {
+-        mAuthenticationStatsCollector.sendFingerprintReEnrollNotification();
+-    }
+-
+-    /**
+-     * Return virtual hal AIDL interface if it is used for testing
+-     *
+-     */
+-    public IVirtualHal getVhal() throws RemoteException {
+-        if (mVhal == null && isVhalForTesting()) {
+-            mVhal = IVirtualHal.Stub.asInterface(
+-                    Binder.allowBlocking(
+-                            ServiceManager.waitForService(
+-                                    IVirtualHal.DESCRIPTOR + "/"
+-                                            + mHalInstanceNameCurrent)));
+-            Slog.d(getTag(), "getVhal " + mHalInstanceNameCurrent);
+-        }
+-        return mVhal;
+-    }
+ }
+diff --git a/services/core/java/com/android/server/biometrics/sensors/face/aidl/Sensor.java b/services/core/java/com/android/server/biometrics/sensors/face/aidl/Sensor.java
+index 9fddcfc199b98..6f9534993a3f0 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/face/aidl/Sensor.java
++++ b/services/core/java/com/android/server/biometrics/sensors/face/aidl/Sensor.java
+@@ -17,7 +17,6 @@
+ package com.android.server.biometrics.sensors.face.aidl;
+ 
+ import static android.hardware.biometrics.BiometricFaceConstants.FACE_ERROR_HW_UNAVAILABLE;
+-import static android.hardware.face.FaceSensorConfigurations.remapFqName;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -338,8 +337,7 @@ public boolean isHardwareDetected(String halInstanceName) {
+         if (mTestHalEnabled) {
+             return true;
+         }
+-        return ServiceManager.checkService(
+-                remapFqName(IFace.DESCRIPTOR + "/" + halInstanceName)) != null;
++        return ServiceManager.checkService(IFace.DESCRIPTOR + "/" + halInstanceName) != null;
+     }
+ 
+     /**
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/FingerprintService.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/FingerprintService.java
+index 2f6ba0b852ee8..60cfd5a5a6aef 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/FingerprintService.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/FingerprintService.java
+@@ -26,7 +26,6 @@
+ import static android.hardware.biometrics.BiometricFingerprintConstants.FINGERPRINT_ERROR_USER_CANCELED;
+ import static android.hardware.biometrics.BiometricFingerprintConstants.FINGERPRINT_ERROR_VENDOR;
+ import static android.hardware.biometrics.SensorProperties.STRENGTH_STRONG;
+-import static android.hardware.fingerprint.FingerprintSensorConfigurations.getIFingerprint;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -79,7 +78,6 @@
+ 
+ import com.android.internal.R;
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.DumpUtils;
+ import com.android.internal.widget.LockPatternUtils;
+ import com.android.server.SystemService;
+@@ -1017,7 +1015,7 @@ public FingerprintService(Context context) {
+         this(context, BiometricContext.getInstance(context),
+                 () -> IBiometricService.Stub.asInterface(
+                         ServiceManager.getService(Context.BIOMETRIC_SERVICE)),
+-                () -> getDeclaredInstances(),
++                () -> ServiceManager.getDeclaredInstances(IFingerprint.DESCRIPTOR),
+                 null /* fingerprintProvider */,
+                 null /* fingerprintProviderFunction */);
+     }
+@@ -1041,7 +1039,8 @@ public FingerprintService(Context context) {
+         mFingerprintProvider = fingerprintProvider != null ? fingerprintProvider :
+                 (name) -> {
+                     final String fqName = IFingerprint.DESCRIPTOR + "/" + name;
+-                    final IFingerprint fp = getIFingerprint(fqName);
++                    final IFingerprint fp = IFingerprint.Stub.asInterface(
++                            Binder.allowBlocking(ServiceManager.waitForDeclaredService(fqName)));
+                     if (fp != null) {
+                         try {
+                             return new FingerprintProvider(getContext(),
+@@ -1130,24 +1129,6 @@ public void onStart() {
+         publishBinderService(Context.FINGERPRINT_SERVICE, mServiceWrapper);
+     }
+ 
+-    /**
+-     * Get all fingerprint hal instances declared in manifest
+-     * @return instance names
+-     */
+-    public static String[] getDeclaredInstances() {
+-        String[] a = ServiceManager.getDeclaredInstances(IFingerprint.DESCRIPTOR);
+-        Slog.i(TAG, "Before:getDeclaredInstances: IFingerprint instance found, a.length="
+-                + a.length);
+-        if (!ArrayUtils.contains(a, "virtual")) {
+-            // Now, the virtual hal is registered with IVirtualHal interface and it is also
+-            //   moved from vendor to system_ext partition without a device manifest. So
+-            //   if the old vhal is not declared, add here.
+-            a = ArrayUtils.appendElement(String.class, a, "virtual");
+-        }
+-        Slog.i(TAG, "After:getDeclaredInstances: a.length=" + a.length);
+-        return a;
+-    }
+-
+     @NonNull
+     private List<Fingerprint> getEnrolledFingerprintsDeprecated(int userId, String opPackageName) {
+         final Pair<Integer, ServiceProvider> provider = mRegistry.getSingleProvider();
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/BiometricTestSessionImpl.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/BiometricTestSessionImpl.java
+index fd3d9963c5e3e..a50ce2b0305f4 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/BiometricTestSessionImpl.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/BiometricTestSessionImpl.java
+@@ -20,9 +20,6 @@
+ import android.content.Context;
+ import android.hardware.biometrics.ITestSession;
+ import android.hardware.biometrics.ITestSessionCallback;
+-import android.hardware.biometrics.fingerprint.virtualhal.AcquiredInfoAndVendorCode;
+-import android.hardware.biometrics.fingerprint.virtualhal.EnrollmentProgressStep;
+-import android.hardware.biometrics.fingerprint.virtualhal.NextEnrollment;
+ import android.hardware.fingerprint.Fingerprint;
+ import android.hardware.fingerprint.FingerprintEnrollOptions;
+ import android.hardware.fingerprint.FingerprintManager;
+@@ -49,7 +46,6 @@
+ class BiometricTestSessionImpl extends ITestSession.Stub {
+ 
+     private static final String TAG = "fp/aidl/BiometricTestSessionImpl";
+-    private static final int VHAL_ENROLLMENT_ID = 9999;
+ 
+     @NonNull private final Context mContext;
+     private final int mSensorId;
+@@ -144,8 +140,8 @@ public void setTestHalEnabled(boolean enabled) {
+ 
+         super.setTestHalEnabled_enforcePermission();
+ 
+-        mSensor.setTestHalEnabled(enabled);
+         mProvider.setTestHalEnabled(enabled);
++        mSensor.setTestHalEnabled(enabled);
+     }
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+@@ -161,31 +157,10 @@ public void startEnroll(int userId) {
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void finishEnroll(int userId) throws RemoteException {
++    public void finishEnroll(int userId) {
+ 
+         super.finishEnroll_enforcePermission();
+ 
+-        Slog.i(TAG, "finishEnroll(): useVhalForTesting=" + mProvider.useVhalForTesting());
+-        if (mProvider.useVhalForTesting()) {
+-            final AcquiredInfoAndVendorCode[] acquiredInfoAndVendorCodes =
+-                    {new AcquiredInfoAndVendorCode()};
+-            final EnrollmentProgressStep[] enrollmentProgressSteps =
+-                    {new EnrollmentProgressStep(), new EnrollmentProgressStep()};
+-            enrollmentProgressSteps[0].durationMs = 100;
+-            enrollmentProgressSteps[0].acquiredInfoAndVendorCodes = acquiredInfoAndVendorCodes;
+-            enrollmentProgressSteps[1].durationMs = 200;
+-            enrollmentProgressSteps[1].acquiredInfoAndVendorCodes = acquiredInfoAndVendorCodes;
+-
+-            final NextEnrollment nextEnrollment = new NextEnrollment();
+-            nextEnrollment.id = VHAL_ENROLLMENT_ID;
+-            nextEnrollment.progressSteps = enrollmentProgressSteps;
+-            nextEnrollment.result = true;
+-            mProvider.getVhal().setNextEnrollment(nextEnrollment);
+-            mProvider.simulateVhalFingerDown(userId, mSensorId);
+-            return;
+-        }
+-
+-        //TODO (b341889971): delete the following lines when b/341889971 is resolved
+         int nextRandomId = mRandom.nextInt();
+         while (mEnrollmentIds.contains(nextRandomId)) {
+             nextRandomId = mRandom.nextInt();
+@@ -198,18 +173,11 @@ public void finishEnroll(int userId) throws RemoteException {
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void acceptAuthentication(int userId) throws RemoteException {
++    public void acceptAuthentication(int userId)  {
+ 
+         // Fake authentication with any of the existing fingers
+         super.acceptAuthentication_enforcePermission();
+ 
+-        if (mProvider.useVhalForTesting()) {
+-            mProvider.getVhal().setEnrollmentHit(VHAL_ENROLLMENT_ID);
+-            mProvider.simulateVhalFingerDown(userId, mSensorId);
+-            return;
+-        }
+-
+-        //TODO (b341889971): delete the following lines when b/341889971 is resolved
+         List<Fingerprint> fingerprints = FingerprintUtils.getInstance(mSensorId)
+                 .getBiometricsForUser(mContext, userId);
+         if (fingerprints.isEmpty()) {
+@@ -223,17 +191,10 @@ public void acceptAuthentication(int userId) throws RemoteException {
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void rejectAuthentication(int userId) throws RemoteException  {
++    public void rejectAuthentication(int userId)  {
+ 
+         super.rejectAuthentication_enforcePermission();
+ 
+-        if (mProvider.useVhalForTesting()) {
+-            mProvider.getVhal().setEnrollmentHit(VHAL_ENROLLMENT_ID + 1);
+-            mProvider.simulateVhalFingerDown(userId, mSensorId);
+-            return;
+-        }
+-
+-        //TODO (b341889971): delete the following lines when b/341889971 is resolved
+         mSensor.getSessionForUser(userId).getHalSessionCallback().onAuthenticationFailed();
+     }
+ 
+@@ -259,17 +220,11 @@ public void notifyError(int userId, int errorCode)  {
+ 
+     @android.annotation.EnforcePermission(android.Manifest.permission.TEST_BIOMETRIC)
+     @Override
+-    public void cleanupInternalState(int userId) throws RemoteException {
++    public void cleanupInternalState(int userId)  {
+ 
+         super.cleanupInternalState_enforcePermission();
+ 
+         Slog.d(TAG, "cleanupInternalState: " + userId);
+-
+-        if (mProvider.useVhalForTesting()) {
+-            Slog.i(TAG, "cleanup virtualhal configurations");
+-            mProvider.getVhal().resetConfigurations(); //setEnrollments(new int[]{});
+-        }
+-
+         mProvider.scheduleInternalCleanup(mSensorId, userId, new ClientMonitorCallback() {
+             @Override
+             public void onClientStarted(@NonNull BaseClientMonitor clientMonitor) {
+@@ -301,3 +256,4 @@ public int getSensorId() {
+         return mSensorId;
+     }
+ }
++
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
+index e29b003ec4d3f..d1564247c8e14 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/FingerprintProvider.java
+@@ -17,8 +17,6 @@
+ package com.android.server.biometrics.sensors.fingerprint.aidl;
+ 
+ import static android.hardware.fingerprint.FingerprintManager.SENSOR_ID_ANY;
+-import static android.hardware.fingerprint.FingerprintSensorConfigurations.getIFingerprint;
+-import static android.hardware.fingerprint.FingerprintSensorConfigurations.remapFqName;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -38,7 +36,6 @@
+ import android.hardware.biometrics.fingerprint.IFingerprint;
+ import android.hardware.biometrics.fingerprint.PointerContext;
+ import android.hardware.biometrics.fingerprint.SensorProps;
+-import android.hardware.biometrics.fingerprint.virtualhal.IVirtualHal;
+ import android.hardware.fingerprint.Fingerprint;
+ import android.hardware.fingerprint.FingerprintAuthenticateOptions;
+ import android.hardware.fingerprint.FingerprintEnrollOptions;
+@@ -62,7 +59,6 @@
+ import com.android.server.biometrics.AuthenticationStatsCollector;
+ import com.android.server.biometrics.BiometricDanglingReceiver;
+ import com.android.server.biometrics.BiometricHandlerProvider;
+-import com.android.server.biometrics.Flags;
+ import com.android.server.biometrics.Utils;
+ import com.android.server.biometrics.log.BiometricContext;
+ import com.android.server.biometrics.log.BiometricLogger;
+@@ -134,8 +130,6 @@ public class FingerprintProvider implements IBinder.DeathRecipient, ServiceProvi
+     @Nullable private IUdfpsOverlayController mUdfpsOverlayController;
+     private final AuthSessionCoordinator mAuthSessionCoordinator;
+     @Nullable private AuthenticationStatsCollector mAuthenticationStatsCollector;
+-    @Nullable private IVirtualHal mVhal;
+-    @Nullable private String mHalInstanceNameCurrent;
+ 
+     private boolean mCleanup;
+     
+@@ -298,8 +292,7 @@ boolean hasHalInstance() {
+         if (mTestHalEnabled) {
+             return true;
+         }
+-        return (ServiceManager.checkService(
+-                remapFqName(IFingerprint.DESCRIPTOR + "/" + mHalInstanceName))
++        return (ServiceManager.checkService(IFingerprint.DESCRIPTOR + "/" + mHalInstanceName)
+                 != null);
+     }
+ 
+@@ -307,29 +300,10 @@ boolean hasHalInstance() {
+     @VisibleForTesting
+     synchronized IFingerprint getHalInstance() {
+         if (mTestHalEnabled) {
+-            if (Flags.useVhalForTesting()) {
+-                if (!mHalInstanceNameCurrent.contains("virtual")) {
+-                    Slog.i(getTag(), "Switching fingerprint hal from " + mHalInstanceName
+-                            + " to virtual hal");
+-                    mHalInstanceNameCurrent = "virtual";
+-                    mDaemon = null;
+-                }
+-            } else {
+-                // Enabling the test HAL for a single sensor in a multi-sensor HAL currently enables
+-                // the test HAL for all sensors under that HAL. This can be updated in the future if
+-                // necessary.
+-                return new TestHal();
+-            }
+-        } else {
+-            if (mHalInstanceNameCurrent == null) {
+-                mHalInstanceNameCurrent = mHalInstanceName;
+-            } else if (mHalInstanceNameCurrent.contains("virtual")
+-                    && mHalInstanceNameCurrent != mHalInstanceName) {
+-                Slog.i(getTag(), "Switching fingerprint from virtual hal " + "to "
+-                        + mHalInstanceName);
+-                mHalInstanceNameCurrent = mHalInstanceName;
+-                mDaemon = null;
+-            }
++            // Enabling the test HAL for a single sensor in a multi-sensor HAL currently enables
++            // the test HAL for all sensors under that HAL. This can be updated in the future if
++            // necessary.
++            return new TestHal();
+         }
+ 
+         if (mDaemon != null) {
+@@ -338,7 +312,10 @@ synchronized IFingerprint getHalInstance() {
+ 
+         Slog.d(getTag(), "Daemon was null, reconnecting");
+ 
+-        mDaemon = getIFingerprint(IFingerprint.DESCRIPTOR + "/" + mHalInstanceNameCurrent);
++        mDaemon = IFingerprint.Stub.asInterface(
++                Binder.allowBlocking(
++                        ServiceManager.waitForDeclaredService(
++                                IFingerprint.DESCRIPTOR + "/" + mHalInstanceName)));
+         if (mDaemon == null) {
+             Slog.e(getTag(), "Unable to get daemon");
+             return null;
+@@ -799,17 +776,7 @@ public void setUdfpsOverlayController(@NonNull IUdfpsOverlayController controlle
+ 
+     @Override
+     public void setIgnoreDisplayTouches(long requestId, int sensorId, boolean ignoreTouches) {
+-        if (Flags.setIgnoreSpeedUp()) {
+-            try {
+-                mFingerprintSensors.get(
+-                        sensorId).getLazySession().get().getSession().setIgnoreDisplayTouches(
+-                        ignoreTouches);
+-                Slog.d(getTag(), "setIgnoreDisplayTouches set to " + ignoreTouches);
+-            } catch (Exception e) {
+-                Slog.w(getTag(), "setIgnore failed", e);
+-            }
+-        } else {
+-            mFingerprintSensors.get(sensorId).getScheduler().getCurrentClientIfMatches(
++        mFingerprintSensors.get(sensorId).getScheduler().getCurrentClientIfMatches(
+                 requestId, (client) -> {
+                     if (!(client instanceof Udfps)) {
+                         Slog.e(getTag(),
+@@ -818,7 +785,6 @@ public void setIgnoreDisplayTouches(long requestId, int sensorId, boolean ignore
+                     }
+                     ((Udfps) client).setIgnoreDisplayTouches(ignoreTouches);
+                 });
+-        }
+     }
+ 
+     @Override
+@@ -922,13 +888,7 @@ public void binderDied() {
+     }
+ 
+     void setTestHalEnabled(boolean enabled) {
+-        final boolean changed = enabled != mTestHalEnabled;
+         mTestHalEnabled = enabled;
+-        Slog.i(getTag(), "setTestHalEnabled(): useVhalForTestingFlags=" + Flags.useVhalForTesting()
+-                + " mTestHalEnabled=" + mTestHalEnabled + " changed=" + changed);
+-        if (changed && useVhalForTesting()) {
+-            getHalInstance();
+-        }
+     }
+ 
+     public boolean getTestHalEnabled() {
+@@ -1011,27 +971,4 @@ public void simulateVhalFingerDown(int userId, int sensorId) {
+     public void sendFingerprintReEnrollNotification() {
+         mAuthenticationStatsCollector.sendFingerprintReEnrollNotification();
+     }
+-
+-    /**
+-     * Return virtual hal AIDL interface if it is used for testing
+-     *
+-     */
+-    public IVirtualHal getVhal() throws RemoteException {
+-        if (mVhal == null && useVhalForTesting()) {
+-            mVhal = IVirtualHal.Stub.asInterface(
+-                    Binder.allowBlocking(
+-                            ServiceManager.waitForService(
+-                                    IVirtualHal.DESCRIPTOR + "/"
+-                                            + mHalInstanceNameCurrent)));
+-            Slog.d(getTag(), "getVhal " + mHalInstanceNameCurrent);
+-        }
+-        return mVhal;
+-    }
+-
+-    /**
+-     * Return true if vhal_for_testing feature is enabled and test is active
+-     */
+-    public boolean useVhalForTesting() {
+-        return (Flags.useVhalForTesting() && mTestHalEnabled);
+-    }
+ }
+diff --git a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java
+index 25d1fe7d32ba3..d12d7b2dc89a2 100644
+--- a/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java
++++ b/services/core/java/com/android/server/biometrics/sensors/fingerprint/aidl/Sensor.java
+@@ -16,8 +16,6 @@
+ 
+ package com.android.server.biometrics.sensors.fingerprint.aidl;
+ 
+-import static android.hardware.fingerprint.FingerprintSensorConfigurations.remapFqName;
+-
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.content.Context;
+@@ -358,8 +356,8 @@ protected boolean isHardwareDetected(String halInstance) {
+         if (mTestHalEnabled) {
+             return true;
+         }
+-        return (ServiceManager.checkService(
+-                remapFqName(IFingerprint.DESCRIPTOR + "/" + halInstance)) != null);
++        return (ServiceManager.checkService(IFingerprint.DESCRIPTOR + "/" + halInstance)
++                != null);
+     }
+ 
+     @NonNull protected BiometricContext getBiometricContext() {
